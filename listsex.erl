@@ -6,14 +6,14 @@
 %%%
 %%%----------------------------------------------------------------------
 -module(listsex).
--export([for/2, foracc/3, while/2, while/3, untilerror/2]).
--export([find/2, mapfind/2, foldlwhile/3]).
+-export([for/2, foracc/3, while/2, while/3, untilerror/2, untilerror/3]).
+-export([find/2, mapfind/2, mapfind/3, foldlwhile/3, foldwhile/4]).
 
 -export([classify/2, classify/4]).
--export([count/2, fcount/2, takecount/1]).
+-export([count/2, fcount/2, takecount/1, nmerge/1]).
 -export([indexof/2, findexof/2, insertat/3, removeat/2, takeat/2, replaceat/3]).
 -export([insertsorted/2, insertsortedf/3]).
--export([keycount/3, keyfoldl/5, keyfoldr/5]).
+-export([keycount/3, keyfoldl/5, keyfoldr/5, keyupdate/4, keyupdate/5]).
 -export([keyclassify/2, keyclassify/4, keyclassifyl/2, keyclassifyl/4]).
 
 -export([randallot/2, randallot2/2, shuffle/1, shuffle2/1]).
@@ -24,6 +24,9 @@
 -export([rand_dissimilar_from_deeplist/1]).
 
 -export([priority_accept/3, remove_duplicates/1, subtract_rmdup/2]).
+-export([isallsame/1, key_isallsame/2]).
+
+-export([ets_take/2, pmap/2, split_into/2, divide_every_two/1]).
 
 %% @doc 执行指定函数N次
 for(_Fun, N) when N =< 0 ->
@@ -67,6 +70,17 @@ untilerror(Fun, Acc) ->
             untilerror(Fun, Acc2)
     end.
 
+%% @doc 执行指定函数直至出错或次数达到
+untilerror(_, Acc, 0) ->
+    {normal, Acc};
+untilerror(Fun, Acc, N) ->
+    case catch Fun(Acc) of
+        {error, Reason} ->
+            {Reason, Acc};
+        Acc2 ->
+            untilerror(Fun, Acc2, N - 1)
+    end.
+
 %% @doc 返回第一个匹配的元素
 find(Pred, [H|T]) ->
     case Pred(H) of
@@ -78,16 +92,21 @@ find(Pred, [H|T]) ->
 find(_, []) ->
     false.
 
-%% @doc 返回第一个执行指定函数后结果不为false的结果
+%% @doc 返回第一个执行指定函数后结果不为Default的结果
 mapfind(Fun, [H|T]) ->
+    mapfind(Fun, [H|T], false);
+mapfind(_Fun, []) ->
+    false.
+
+mapfind(Fun, [H|T], Default) ->
     case Fun(H) of
-        false ->
-            mapfind(Fun, T);
+        Default ->
+            mapfind(Fun, T, Default);
         Val ->
             Val
     end;
-mapfind(_, []) ->
-    false.
+mapfind(_, [], Default) ->
+    Default.
 
 %% @doc 数个数
 count(E, L) ->
@@ -189,7 +208,7 @@ replaceat(Idx, L, Val) ->
 replaceat(_, [], Acc, _, _) ->
 	lists:reverse(Acc);
 replaceat(Idx, [_|T], Acc, Count, Val) when Count =:= Idx ->
-	replaceat(Idx, T, [Val|Acc], Count+1, Val);
+    lists:reverse(Acc, [Val|T]);
 replaceat(Idx, [H|T], Acc, Count, Val) ->
 	replaceat(Idx, T, [H|Acc], Count+1, Val).
 
@@ -233,6 +252,15 @@ foldlwhile(Pred, Acc0, [H|T]) ->
             Acc
     end;
 foldlwhile(_Pred, Acc, []) ->
+    Acc.
+
+%% @doc 直到Pred返回default之前一直fold,注意返回的列表逆序
+foldwhile(Pred, Acc0, [H|T], Default) ->
+    case Pred(H) of
+        Default -> Default;
+        Val -> foldwhile(Pred, [Val| Acc0], T, Default)
+    end;
+foldwhile(_Pred, Acc, [], _Default) ->
     Acc.
 
 %% @doc 将一个列表分成几个子列表
@@ -314,6 +342,40 @@ keyfoldr(Key, N, F, Acc, [H|T]) when element(N, H) =:= Key ->
     F(H, keyfoldr(Key, N, F, Acc, T));
 keyfoldr(Key, N, F, Acc, [_|T]) ->
     keyfoldr(Key, N, F, Acc, T).
+
+%% @doc 按key更新
+keyupdate(Key, N, L, Fun) when is_function(Fun, 1) ->
+    case lists:keyfind(Key, N, L) of
+        false ->
+            false;
+        Tuple ->
+            lists:keyreplace(Key, N, L, Fun(Tuple))
+    end.
+
+%% @doc 更新List中的某一项的某一项 
+%% e.g: -record(troop, {pos, fac_id, round}).
+%% keyupdate(2, #troop.fac_id, #troop.round, [{troop, 1, 1101, 2}, {troop, 2, 1103, 1}], 3) ->
+%%     [{troop, 1, 1101, 2}, {troop, 2, 1103, 3}] 
+%% @end
+keyupdate(Key, KN, EN, L, Fun) when is_function(Fun, 1) ->
+    case lists:keyfind(Key, KN, L) of
+        false -> L;
+        Tuple -> 
+            Tuple2 = setelement(EN, Tuple, Fun(element(EN, Tuple))),
+            lists:keyreplace(Key, KN, L, Tuple2)
+    end;
+keyupdate(Key, KN, EN, L, NewEle) ->
+    case lists:keyfind(Key, KN, L) of
+        false -> L;
+        Tuple -> 
+            Tuple2 = setelement(EN, Tuple, NewEle),
+            lists:keyreplace(Key, KN, L, Tuple2)
+    end.
+
+%% @doc 按tuple的第一个元素进行数量合并
+%% eg. [{a, 1}, {b, 2}, {a, 3}, {c, 2}, {b, 1}] -> [{a, 4}, {b, 3}, {c, 2}].
+nmerge(L) ->
+    classify(fun({X, _}) -> X end, L, 0, fun({_, N}, Acc) -> N + Acc end).
 
 %%----------------------------------------------------------------------------
 %% 优先级条件取子列表
@@ -587,7 +649,7 @@ rand_dissimilar_from_deeplist(L) when is_list(L) ->
 rand_dissimilar_from_deeplist(L) when is_tuple(L) ->
     rand_dissimilar_from_deeplist(tuple_to_list(L), []).
 rand_dissimilar_from_deeplist([], Acc) ->
-    Acc;
+    lists:reverse(Acc);
 rand_dissimilar_from_deeplist([H|T], Acc) ->
     case lists:foldl(fun(Id, R) -> lists:keydelete(Id, 1, R) end, H, Acc) of
         [] ->
@@ -597,3 +659,85 @@ rand_dissimilar_from_deeplist([H|T], Acc) ->
             rand_dissimilar_from_deeplist(T, [Id | Acc])
     end.
 
+%% 列表元素是否完全一样
+isallsame([]) ->
+    false;
+isallsame([H]) ->
+    H;
+isallsame([H|T]) ->
+    case lists:all(fun(I) -> I =:= H end, T) of
+        true -> H;
+        false -> false
+    end.
+
+%% 列表元素tuple的某一项是否完全一样
+key_isallsame(_N, []) ->
+    false;
+key_isallsame(N, [H]) ->
+    element(N, H);
+key_isallsame(N, [H|T]) ->
+    Key = element(N, H),
+    case lists:all(fun(I) -> element(N, I) =:= Key end, T) of
+        true -> Key;
+        false -> false
+    end.
+
+ets_take(Ets, N) ->
+    ets_take(Ets, N, ets:first(Ets), 0, []).
+
+ets_take(_Ets, _N, '$end_of_table', _, Acc) ->
+    Acc;
+ets_take(_Ets, N, _, N, Acc) ->
+    Acc;
+ets_take(Ets, N, Key, AccN, Acc) ->
+    ets_take(Ets, N, ets:next(Ets, Key), AccN + 1, [Key|Acc]).
+
+%% 将列表按类型和顺序切分成多个子列表                                            
+split_into(F, [H|T]) ->                                                          
+    split_into2(F, T, F(H), [H], []).                                            
+
+split_into2(_F, [], Tag, AccSub, Acc) ->                                         
+    Acc2 = [{Tag, lists:reverse(AccSub)} | Acc],                                 
+    lists:reverse(Acc2);                                                         
+split_into2(F, [H|T], Tag, AccSub, Acc) ->                                       
+    TagCur = F(H),                                                               
+    case TagCur of                                                               
+        Tag ->                                                                   
+            % 类型相同                                                           
+            split_into2(F, T, Tag, [H|AccSub], Acc);                             
+        _ ->                                                                     
+            % 类型不同                                                           
+            AccSub2 = {Tag, lists:reverse(AccSub)},                              
+            split_into2(F, T, TagCur, [H], [AccSub2|Acc])                        
+    end.    
+
+%% 两两分组
+divide_every_two(L) ->
+    divide_every_two(L, []).
+divide_every_two([], Acc) ->
+    {lists:reverse(Acc), []};
+divide_every_two([H], Acc) ->
+    {lists:reverse(Acc), [H]};
+divide_every_two([H1, H2|T], Acc) ->
+    Acc2 = [{H1, H2}|Acc],
+    divide_every_two(T, Acc2).
+
+%% 多线程执行lists:map
+pmap(F, L) ->
+    S = self(),
+    %% make_ref() returns a unique reference
+    %% we'll match on this later
+    Ref = erlang:make_ref(),
+    Pids = lists:map(fun(I) ->
+                spawn(fun() -> do_f(S, Ref, F, I) end)
+        end, L),
+    %% gather the results
+    gather(Pids, Ref).
+do_f(Parent, Ref, F, I) ->
+    Parent ! {self(), Ref, (catch F(I))}.
+gather([Pid|T], Ref) ->
+    receive
+        {Pid, Ref, Ret} -> [Ret|gather(T, Ref)]
+    end;
+gather([], _) ->
+    [].
